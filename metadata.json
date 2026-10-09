@@ -1,0 +1,8 @@
+{
+  "name": "Income \u0026 Expense Tracker for Google Sheets",
+  "description": "Business income and expense tracker with live Google Sheets sync, analytics, and transaction entry.",
+  "requestFramePermissions": [],
+  "majorCapabilities": [
+    "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
+  ]
+}

@@ -1,0 +1,6 @@
+{
+  "summary": "Implementation plan to permanently configure the Google Apps Script Web App URL as the default across all devices and GitHub Pages deployments, removing any prompt during login while retaining manual configuration via the header menu.",
+  "updatedAt": "2026-10-06T18:16:46.401808014Z",
+  "requestFeedback": true,
+  "userFacing": true
+}

@@ -1,0 +1,111 @@
+<svg viewBox="0 0 520 68" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <filter id="nt-same-to-same-shadow" x="-10%" y="-15%" width="125%" height="145%">
+      <feDropShadow dx="0" dy="2.5" stdDeviation="2" floodColor="#0f172a" floodOpacity="0.22" />
+      <feDropShadow dx="0" dy="1" stdDeviation="0.8" floodColor="#0f172a" floodOpacity="0.14" />
+    </filter>
+
+    <linearGradient id="nt-c-pink1" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stopColor="#FF1278" />
+      <stop offset="100%" stopColor="#E60064" />
+    </linearGradient>
+
+    <linearGradient id="nt-c-orange1" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stopColor="#FF7700" />
+      <stop offset="100%" stopColor="#E85800" />
+    </linearGradient>
+
+    <linearGradient id="nt-c-yellow1" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stopColor="#FFC200" />
+      <stop offset="100%" stopColor="#EAA300" />
+    </linearGradient>
+
+    <linearGradient id="nt-c-green1" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stopColor="#00C42B" />
+      <stop offset="100%" stopColor="#00A220" />
+    </linearGradient>
+
+    <linearGradient id="nt-c-blue1" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stopColor="#00A8FF" />
+      <stop offset="100%" stopColor="#0088E6" />
+    </linearGradient>
+
+    <linearGradient id="nt-c-purple1" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stopColor="#8220D9" />
+      <stop offset="100%" stopColor="#670CB8" />
+    </linearGradient>
+
+    <linearGradient id="nt-c-pink2" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stopColor="#FF1278" />
+      <stop offset="100%" stopColor="#E60064" />
+    </linearGradient>
+
+    <linearGradient id="nt-c-blue2" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stopColor="#00A8FF" />
+      <stop offset="100%" stopColor="#0088E6" />
+    </linearGradient>
+
+    <linearGradient id="nt-c-green2" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stopColor="#00C42B" />
+      <stop offset="100%" stopColor="#00A220" />
+    </linearGradient>
+
+    <linearGradient id="nt-c-purple2" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stopColor="#8220D9" />
+      <stop offset="100%" stopColor="#670CB8" />
+    </linearGradient>
+
+    <linearGradient id="nt-c-blue3" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stopColor="#00A8FF" />
+      <stop offset="100%" stopColor="#0088E6" />
+    </linearGradient>
+
+    <linearGradient id="nt-c-orange2" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stopColor="#FF7700" />
+      <stop offset="100%" stopColor="#E85800" />
+    </linearGradient>
+
+    <linearGradient id="nt-c-purple3" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stopColor="#8220D9" />
+      <stop offset="100%" stopColor="#670CB8" />
+    </linearGradient>
+
+    <linearGradient id="nt-c-yellow2" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stopColor="#FFC200" />
+      <stop offset="100%" stopColor="#EAA300" />
+    </linearGradient>
+
+    <linearGradient id="nt-c-pink3" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stopColor="#FF1278" />
+      <stop offset="100%" stopColor="#E60064" />
+    </linearGradient>
+  </defs>
+
+  <g
+    filter="url(#nt-same-to-same-shadow)"
+    font-family="'Plus Jakarta Sans', system-ui, -apple-system, sans-serif"
+    font-weight="900"
+    stroke="#FFFFFF"
+    stroke-width="4.5"
+    paint-order="stroke fill"
+    stroke-linejoin="round"
+    stroke-linecap="round"
+  >
+    <text x="8" y="49" font-size="50" fill="url(#nt-c-pink1)">N</text>
+    <text x="47" y="50" font-size="46" fill="url(#nt-c-orange1)">a</text>
+    <text x="80" y="50" font-size="46" fill="url(#nt-c-yellow1)">u</text>
+    <text x="114" y="52" font-size="48" fill="url(#nt-c-green1)">g</text>
+    <text x="151" y="49" font-size="48" fill="url(#nt-c-blue1)">h</text>
+    <text x="187" y="50" font-size="46" fill="url(#nt-c-purple1)">t</text>
+    <text x="211" y="52" font-size="48" fill="url(#nt-c-pink2)">y</text>
+
+    <text x="262" y="49" font-size="50" fill="url(#nt-c-blue2)">T</text>
+    <text x="299" y="50" font-size="46" fill="url(#nt-c-green2)">o</text>
+    <text x="333" y="49" font-size="48" fill="url(#nt-c-purple2)">d</text>
+    <text x="369" y="49" font-size="48" fill="url(#nt-c-blue3)">d</text>
+    <text x="405" y="49" font-size="48" fill="url(#nt-c-orange2)">l</text>
+    <text x="425" y="50" font-size="46" fill="url(#nt-c-purple3)">e</text>
+    <text x="457" y="50" font-size="46" fill="url(#nt-c-yellow2)">r</text>
+    <text x="485" y="50" font-size="46" fill="url(#nt-c-pink3)">s</text>
+  </g>
+</svg>
