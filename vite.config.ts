@@ -73,16 +73,88 @@ function appConfigPlugin(): Plugin {
     }
   };
 
+  const attachmentsDir = path.resolve('data/attachments');
+  if (!fs.existsSync(attachmentsDir)) {
+    fs.mkdirSync(attachmentsDir, { recursive: true });
+  }
+
+  const handleAttachments = (req: any, res: any) => {
+    const url = req.url || '';
+    if (req.method === 'GET') {
+      if (url === '/api/attachments' || url === '/api/attachments/' || url === '') {
+        try {
+          const files = fs.readdirSync(attachmentsDir);
+          const result: Record<string, any> = {};
+          for (const f of files) {
+            if (f.endsWith('.json')) {
+              const id = f.replace('.json', '');
+              try {
+                result[id] = JSON.parse(fs.readFileSync(path.join(attachmentsDir, f), 'utf-8'));
+              } catch {}
+            }
+          }
+          res.setHeader('Content-Type', 'application/json');
+          res.end(JSON.stringify(result));
+        } catch (e: any) {
+          res.statusCode = 500;
+          res.end(JSON.stringify({ error: e.message }));
+        }
+      } else {
+        const id = url.replace(/^\/?/, '').split('?')[0];
+        const safeId = id.replace(/[^a-zA-Z0-9_-]/g, '_');
+        const filePath = path.join(attachmentsDir, `${safeId}.json`);
+        if (fs.existsSync(filePath)) {
+          res.setHeader('Content-Type', 'application/json');
+          res.end(fs.readFileSync(filePath, 'utf-8'));
+        } else {
+          res.statusCode = 404;
+          res.end(JSON.stringify({ error: 'Attachment not found' }));
+        }
+      }
+    } else if (req.method === 'POST') {
+      let body = '';
+      req.on('data', (chunk: any) => { body += chunk; });
+      req.on('end', () => {
+        try {
+          const { id, name, type, size, dataUrl, txId } = JSON.parse(body || '{}');
+          if (!id || !dataUrl) {
+            res.statusCode = 400;
+            res.end(JSON.stringify({ error: 'id and dataUrl required' }));
+            return;
+          }
+          const safeId = String(id).replace(/[^a-zA-Z0-9_-]/g, '_');
+          const filePath = path.join(attachmentsDir, `${safeId}.json`);
+          const attObj = { id: safeId, name: name || 'Attachment', type: type || 'image/jpeg', size: Number(size) || 0, dataUrl, txId: txId || '', uploadedAt: new Date().toISOString() };
+          fs.writeFileSync(filePath, JSON.stringify(attObj), 'utf-8');
+          res.setHeader('Content-Type', 'application/json');
+          res.end(JSON.stringify({ success: true, attachment: attObj }));
+        } catch (e: any) {
+          res.statusCode = 500;
+          res.end(JSON.stringify({ error: e.message }));
+        }
+      });
+    } else {
+      res.statusCode = 405;
+      res.end('Method Not Allowed');
+    }
+  };
+
   return {
     name: 'app-config-plugin',
     configureServer(server) {
       server.middlewares.use('/api/config', (req, res) => {
         handleConfig(req, res);
       });
+      server.middlewares.use('/api/attachments', (req, res) => {
+        handleAttachments(req, res);
+      });
     },
     configurePreviewServer(server) {
       server.middlewares.use('/api/config', (req, res) => {
         handleConfig(req, res);
+      });
+      server.middlewares.use('/api/attachments', (req, res) => {
+        handleAttachments(req, res);
       });
     }
   };

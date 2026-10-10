@@ -17,10 +17,12 @@ import {
   ZoomIn, 
   ZoomOut, 
   RotateCw,
-  AlertCircle
+  AlertCircle,
+  Loader2
 } from 'lucide-react';
 import { BillAttachment } from '../types';
-import { getAttachmentsForTx, fetchAttachmentFromServer, saveAttachmentsForTx } from '../services/attachmentStore';
+import { getAttachmentsForTx, fetchAttachmentFromServer, saveAttachmentsForTx, fetchAttachmentFromCloud } from '../services/attachmentStore';
+import { getSavedScriptUrl } from '../services/sheetService';
 
 interface AttachmentPreviewModalProps {
   isOpen: boolean;
@@ -69,43 +71,46 @@ export const AttachmentPreviewModal: React.FC<AttachmentPreviewModalProps> = ({
   const [zoomLevel, setZoomLevel] = useState<number>(1);
   const [rotation, setRotation] = useState<number>(0);
   const [imageLoadError, setImageLoadError] = useState<boolean>(false);
+  const [isLoadingAttachment, setIsLoadingAttachment] = useState<boolean>(false);
 
   // Sync attachments and index when modal opens
   useEffect(() => {
     if (isOpen) {
       setAttachments(initialAttachments);
-      setCurrentIndex(Math.min(Math.max(0, initialIndex), Math.max(0, initialAttachments.length - 1)));
+      const targetIdx = Math.min(Math.max(0, initialIndex), Math.max(0, initialAttachments.length - 1));
+      setCurrentIndex(targetIdx);
       setZoomLevel(1);
       setRotation(0);
       setImageLoadError(false);
 
-      // If any attachment is missing dataUrl, attempt background hydration from IndexedDB and backend server
-      const needsHydration = initialAttachments.some((a) => !a.dataUrl);
-      if (needsHydration) {
-        getAttachmentsForTx(txId || '', signature).then(async (stored) => {
-          let updated = [...initialAttachments];
-          if (stored && stored.length > 0) {
-            updated = updated.map((att, i) => {
-              const match = stored[i] || stored.find((s) => s.name === att.name || s.id === att.id);
-              return match && match.dataUrl ? { ...att, dataUrl: match.dataUrl } : att;
-            });
-          }
-
-          // If still missing dataUrl, query server /api/attachments/:id
-          for (let i = 0; i < updated.length; i++) {
-            const attId = updated[i].id;
-            if (!updated[i].dataUrl && attId) {
-              const fromServer = await fetchAttachmentFromServer(attId);
-              if (fromServer && fromServer.dataUrl) {
-                updated[i] = { ...updated[i], dataUrl: fromServer.dataUrl };
-                saveAttachmentsForTx(txId || '', updated, signature).catch(() => {});
-              }
+      const activeAtt = initialAttachments[targetIdx];
+      if (activeAtt && !activeAtt.dataUrl && activeAtt.id) {
+        setIsLoadingAttachment(true);
+        fetchAttachmentFromCloud(getSavedScriptUrl(), activeAtt.id, txId, signature)
+          .then((cloudData) => {
+            if (cloudData) {
+              setAttachments((prev) =>
+                prev.map((a, i) => (i === targetIdx ? { ...a, dataUrl: cloudData, hasData: true } : a))
+              );
             }
-          }
-
-          setAttachments(updated);
-        });
+          })
+          .finally(() => {
+            setIsLoadingAttachment(false);
+          });
       }
+
+      // Also hydrate any other attachments in this list in background
+      initialAttachments.forEach((att, idx) => {
+        if (!att.dataUrl && att.id && idx !== targetIdx) {
+          fetchAttachmentFromCloud(getSavedScriptUrl(), att.id, txId, signature).then((cloudData) => {
+            if (cloudData) {
+              setAttachments((prev) =>
+                prev.map((a, i) => (i === idx ? { ...a, dataUrl: cloudData, hasData: true } : a))
+              );
+            }
+          });
+        }
+      });
     }
   }, [isOpen, initialIndex, initialAttachments, txId, signature]);
 
@@ -183,11 +188,15 @@ export const AttachmentPreviewModal: React.FC<AttachmentPreviewModalProps> = ({
   };
 
   const handleDownload = async () => {
-    let targetDataUrl = dataUrl;
+    let targetDataUrl: string | null | undefined = dataUrl;
     if (!targetDataUrl && currentAttachment?.id) {
-      const fromServer = await fetchAttachmentFromServer(currentAttachment.id);
-      if (fromServer && fromServer.dataUrl) {
-        targetDataUrl = fromServer.dataUrl;
+      setIsLoadingAttachment(true);
+      targetDataUrl = await fetchAttachmentFromCloud(getSavedScriptUrl(), currentAttachment.id, txId, signature);
+      setIsLoadingAttachment(false);
+      if (targetDataUrl) {
+        setAttachments((prev) =>
+          prev.map((a, i) => (i === currentIndex ? { ...a, dataUrl: targetDataUrl!, hasData: true } : a))
+        );
       }
     }
 
@@ -352,7 +361,17 @@ export const AttachmentPreviewModal: React.FC<AttachmentPreviewModalProps> = ({
           )}
 
           {/* Content Renderers */}
-          {isImage && dataUrl && !imageLoadError ? (
+          {isLoadingAttachment ? (
+            <div className="flex flex-col items-center justify-center p-8 bg-white rounded-2xl border border-indigo-100 shadow-md max-w-sm w-full space-y-3 animate-in fade-in">
+              <div className="w-12 h-12 rounded-2xl bg-indigo-50 flex items-center justify-center">
+                <Loader2 className="w-6 h-6 text-indigo-600 animate-spin" />
+              </div>
+              <div className="text-center">
+                <h4 className="text-xs font-bold text-slate-800">Fetching bill attachment...</h4>
+                <p className="text-[11px] text-slate-500 mt-1">Retrieving image across devices & incognito session</p>
+              </div>
+            </div>
+          ) : isImage && dataUrl && !imageLoadError ? (
             <div className="flex items-center justify-center w-full h-full overflow-auto p-2">
               <img
                 src={dataUrl}
@@ -396,7 +415,7 @@ export const AttachmentPreviewModal: React.FC<AttachmentPreviewModalProps> = ({
                     <span className="font-bold">Bill Attached: </span>
                     {dataUrl 
                       ? 'Format requires downloading to view.' 
-                      : 'File record is logged in transaction history. To preview full image, attach from this device.'}
+                      : 'Attachment file is not available in cloud storage for this legacy entry. You can edit this transaction to re-upload the bill.'}
                   </div>
                 </div>
               </div>

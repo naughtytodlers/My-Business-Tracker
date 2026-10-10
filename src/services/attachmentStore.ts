@@ -49,8 +49,11 @@ export function getTxSignature(date?: string, amount?: number | string, category
   return `${d}_${a}_${c}`;
 }
 
+// In-memory cache for fast synchronous access across components
+export const memoryAttachmentCache = new Map<string, string>();
+
 /**
- * Stores attachments for a specific transaction into IndexedDB.
+ * Stores attachments for a specific transaction into IndexedDB and memory.
  * Retains full-resolution data URLs without localStorage size limits.
  */
 export async function saveAttachmentsForTx(
@@ -59,6 +62,13 @@ export async function saveAttachmentsForTx(
   signature?: string
 ): Promise<void> {
   if (!txId || !attachments || attachments.length === 0) return;
+
+  // Cache in memory immediately for zero-delay component rendering
+  for (const a of attachments) {
+    if (a.id && a.dataUrl) {
+      memoryAttachmentCache.set(a.id, a.dataUrl);
+    }
+  }
 
   try {
     const db = await openDb();
@@ -228,7 +238,9 @@ export async function deleteAttachmentsForTx(txId: string, signature?: string): 
 
 /**
  * Compresses an image file (e.g. screenshot or receipt) using HTML5 Canvas
- * so that it is lightweight (~20-40KB) and syncs instantly across devices.
+ * so that it is lightweight (~20-30KB) and syncs instantly across devices.
+ * 850px max dimension provides crystal-clear readability for invoices and bills,
+ * while fitting safely inside cloud cells and network payloads.
  */
 export async function compressImageAttachment(file: File): Promise<BillAttachment> {
   const fileId = `att_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`;
@@ -238,12 +250,17 @@ export async function compressImageAttachment(file: File): Promise<BillAttachmen
     return new Promise((resolve) => {
       const reader = new FileReader();
       reader.onload = (e) => {
+        const dataUrl = e.target?.result as string;
+        if (dataUrl) {
+          memoryAttachmentCache.set(fileId, dataUrl);
+        }
         resolve({
           id: fileId,
           name: file.name,
           type: file.type || 'application/octet-stream',
           size: file.size,
-          dataUrl: e.target?.result as string,
+          dataUrl,
+          hasData: true,
         });
       };
       reader.onerror = () => {
@@ -265,7 +282,7 @@ export async function compressImageAttachment(file: File): Promise<BillAttachmen
       img.onload = () => {
         try {
           const canvas = document.createElement('canvas');
-          const maxDim = 1000;
+          const maxDim = 850;
           let width = img.width;
           let height = img.height;
 
@@ -284,13 +301,15 @@ export async function compressImageAttachment(file: File): Promise<BillAttachmen
           const ctx = canvas.getContext('2d');
           if (ctx) {
             ctx.drawImage(img, 0, 0, width, height);
-            const compressedDataUrl = canvas.toDataURL('image/jpeg', 0.72);
+            const compressedDataUrl = canvas.toDataURL('image/jpeg', 0.68);
+            memoryAttachmentCache.set(fileId, compressedDataUrl);
             resolve({
               id: fileId,
               name: file.name.replace(/\.[^/.]+$/, '') + '.jpeg',
               type: 'image/jpeg',
               size: Math.round((compressedDataUrl.length * 3) / 4),
               dataUrl: compressedDataUrl,
+              hasData: true,
             });
             return;
           }
@@ -299,12 +318,17 @@ export async function compressImageAttachment(file: File): Promise<BillAttachmen
         }
 
         // Fallback if canvas fails
+        const fallbackUrl = e.target?.result as string;
+        if (fallbackUrl) {
+          memoryAttachmentCache.set(fileId, fallbackUrl);
+        }
         resolve({
           id: fileId,
           name: file.name,
           type: file.type || 'image/jpeg',
           size: file.size,
-          dataUrl: e.target?.result as string,
+          dataUrl: fallbackUrl,
+          hasData: true,
         });
       };
 
@@ -369,16 +393,101 @@ export async function fetchAttachmentFromServer(id: string): Promise<BillAttachm
     if (res.ok) {
       const data = await res.json();
       if (data && data.dataUrl) {
+        memoryAttachmentCache.set(data.id || id, data.dataUrl);
         return {
           id: data.id,
           name: data.name,
           type: data.type,
           size: data.size,
           dataUrl: data.dataUrl,
+          hasData: true,
         };
       }
     }
   } catch {}
+  return null;
+}
+
+/**
+ * Robust cross-device, Incognito-safe fetcher:
+ * 1. Checks memory cache
+ * 2. Checks local IndexedDB
+ * 3. Queries Google Apps Script (action=getAttachment&id=...)
+ * 4. Queries backend server (/api/attachments/:id)
+ * Caches retrieved dataUrl locally so subsequent views are instant.
+ */
+export async function fetchAttachmentFromCloud(
+  scriptUrl: string | undefined,
+  attId: string,
+  txId?: string,
+  signature?: string
+): Promise<string | null> {
+  if (!attId) return null;
+
+  // 1. In-memory cache
+  if (memoryAttachmentCache.has(attId)) {
+    return memoryAttachmentCache.get(attId) || null;
+  }
+
+  // 2. IndexedDB
+  try {
+    const fromIdb = await getAttachmentsForTx(txId || '', signature);
+    const match = fromIdb.find((a) => a.id === attId && Boolean(a.dataUrl));
+    if (match && match.dataUrl) {
+      memoryAttachmentCache.set(attId, match.dataUrl);
+      return match.dataUrl;
+    }
+  } catch {}
+
+  // 3. Google Apps Script Web App (Primary persistent cloud source across all devices & incognito)
+  if (scriptUrl && scriptUrl.trim()) {
+    try {
+      const url = new URL(scriptUrl.trim());
+      url.searchParams.set('action', 'getAttachment');
+      url.searchParams.set('id', attId);
+      url.searchParams.set('t', Date.now().toString());
+
+      const res = await fetch(url.toString(), {
+        method: 'GET',
+        redirect: 'follow',
+      });
+
+      if (res.ok) {
+        const json = await res.json();
+        if (json && json.status === 'success' && json.attachment && json.attachment.dataUrl) {
+          const cloudDataUrl = json.attachment.dataUrl;
+          memoryAttachmentCache.set(attId, cloudDataUrl);
+          // Save to IndexedDB for offline instant access
+          if (txId) {
+            saveAttachmentsForTx(txId, [{
+              id: attId,
+              name: json.attachment.name || 'Attachment',
+              type: json.attachment.type || 'image/jpeg',
+              size: json.attachment.size || 0,
+              dataUrl: cloudDataUrl,
+              hasData: true,
+            }], signature).catch(() => {});
+          }
+          return cloudDataUrl;
+        }
+      }
+    } catch (e) {
+      console.warn('Apps script getAttachment fetch failed:', e);
+    }
+  }
+
+  // 4. Server API fallback (/api/attachments/:id)
+  try {
+    const fromServer = await fetchAttachmentFromServer(attId);
+    if (fromServer && fromServer.dataUrl) {
+      memoryAttachmentCache.set(attId, fromServer.dataUrl);
+      if (txId) {
+        saveAttachmentsForTx(txId, [fromServer], signature).catch(() => {});
+      }
+      return fromServer.dataUrl;
+    }
+  } catch {}
+
   return null;
 }
 

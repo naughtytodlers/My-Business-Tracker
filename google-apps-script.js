@@ -15,7 +15,8 @@ const SETTINGS_SHEET_NAME = 'Settings';
 const USERS_SHEET_NAME = 'Users';
 const ITEMS_SHEET_NAME = 'Items';
 const SELLERS_SHEET_NAME = 'Sellers';
-const SCRIPT_VERSION = '2.2';
+const ATTACHMENTS_SHEET_NAME = '_Attachments';
+const SCRIPT_VERSION = '2.3';
 
 const DEFAULT_INCOME_CATEGORIES = [
   'Salary & Wages',
@@ -177,7 +178,89 @@ function ensureSheetsExist(ss) {
     SpreadsheetApp.flush();
   }
 
-  return { dataSheet, settingsSheet, usersSheet, itemsSheet, sellersSheet };
+  let attachmentsSheet = findSheetCaseInsensitive(ss, ATTACHMENTS_SHEET_NAME);
+  const attHeaders = ['AttachmentID', 'TxID', 'FileName', 'FileType', 'FileSize', 'ChunkIndex', 'TotalChunks', 'ChunkData', 'CreatedAt'];
+  if (!attachmentsSheet) {
+    attachmentsSheet = ss.insertSheet(ATTACHMENTS_SHEET_NAME);
+    attachmentsSheet.appendRow(attHeaders);
+    attachmentsSheet.getRange(1, 1, 1, attHeaders.length).setFontWeight('bold').setBackground('#f3f4f6');
+    SpreadsheetApp.flush();
+  } else if (attachmentsSheet.getLastRow() === 0) {
+    attachmentsSheet.appendRow(attHeaders);
+    attachmentsSheet.getRange(1, 1, 1, attHeaders.length).setFontWeight('bold').setBackground('#f3f4f6');
+    SpreadsheetApp.flush();
+  }
+
+  return { dataSheet, settingsSheet, usersSheet, itemsSheet, sellersSheet, attachmentsSheet };
+}
+
+function saveAttachmentChunks(ss, att, txId) {
+  if (!att || !att.dataUrl) return;
+  const { attachmentsSheet } = ensureSheetsExist(ss);
+  const attId = String(att.id || ('att_' + Date.now())).trim();
+  const name = String(att.name || 'Attachment').trim();
+  const type = String(att.type || 'image/jpeg').trim();
+  const size = Number(att.size) || 0;
+  const dataUrl = String(att.dataUrl || '');
+  const now = new Date().toISOString();
+
+  // Delete existing chunks for this attachment ID to avoid duplication
+  const values = attachmentsSheet.getDataRange().getValues();
+  for (let r = values.length - 1; r >= 1; r--) {
+    if (String(values[r][0] || '').trim() === attId) {
+      attachmentsSheet.deleteRow(r + 1);
+    }
+  }
+
+  // Safe chunk size under 50,000 cell limit
+  const CHUNK_SIZE = 30000;
+  const totalChunks = Math.max(1, Math.ceil(dataUrl.length / CHUNK_SIZE));
+
+  for (let c = 0; c < totalChunks; c++) {
+    const chunkData = dataUrl.substring(c * CHUNK_SIZE, (c + 1) * CHUNK_SIZE);
+    attachmentsSheet.appendRow([attId, txId || '', name, type, size, c, totalChunks, chunkData, now]);
+  }
+  SpreadsheetApp.flush();
+}
+
+function getAttachmentById(ss, targetId) {
+  const { attachmentsSheet } = ensureSheetsExist(ss);
+  const values = attachmentsSheet.getDataRange().getValues();
+  if (values.length <= 1) return null;
+
+  const chunks = [];
+  let name = 'Attachment';
+  let type = 'image/jpeg';
+  let size = 0;
+  let txId = '';
+
+  for (let r = 1; r < values.length; r++) {
+    const row = values[r];
+    if (String(row[0] || '').trim() === String(targetId).trim()) {
+      txId = String(row[1] || '');
+      name = String(row[2] || 'Attachment');
+      type = String(row[3] || 'image/jpeg');
+      size = Number(row[4]) || 0;
+      const chunkIdx = Number(row[5]) || 0;
+      const chunkData = String(row[7] || '');
+      chunks.push({ idx: chunkIdx, data: chunkData });
+    }
+  }
+
+  if (chunks.length === 0) return null;
+
+  chunks.sort(function(a, b) { return a.idx - b.idx; });
+  const fullDataUrl = chunks.map(function(c) { return c.data; }).join('');
+
+  return {
+    id: targetId,
+    txId: txId,
+    name: name,
+    type: type,
+    size: size,
+    dataUrl: fullDataUrl,
+    hasData: true
+  };
 }
 
 /**
@@ -186,6 +269,22 @@ function ensureSheetsExist(ss) {
 function doGet(e) {
   try {
     const action = String(e && e.parameter && e.parameter.action ? e.parameter.action : 'getData').trim();
+
+    if (action === 'getAttachment' && (e.parameter.id || e.parameter.attachmentId)) {
+      const attId = e.parameter.id || e.parameter.attachmentId;
+      const ss = getSpreadsheet();
+      const att = getAttachmentById(ss, decodeURIComponent(attId));
+      if (att) {
+        return createJsonResponse({
+          status: 'success',
+          attachment: att
+        });
+      }
+      return createJsonResponse({
+        status: 'error',
+        message: 'Attachment not found in cloud storage'
+      });
+    }
 
     if ((action === 'add' || action === 'addTransaction') && e.parameter.data) {
       const payload = JSON.parse(decodeURIComponent(e.parameter.data));
@@ -318,6 +417,15 @@ function doPost(e) {
     }
     if (action === 'deduplicateSheet' || action === 'cleanDuplicates') {
       return handleDeduplicateSheet();
+    }
+    if (action === 'saveAttachment') {
+      const ss = getSpreadsheet();
+      const attData = payload.attachment || payload;
+      saveAttachmentChunks(ss, attData, payload.txId || attData.txId);
+      return createJsonResponse({
+        status: 'success',
+        message: 'Attachment saved to cloud successfully'
+      });
     }
     if (action === 'add' || action === 'addTransaction') {
       return handleAddTransaction(payload);
@@ -554,12 +662,20 @@ function handleAddTransaction(payload) {
   
   if (attList.length > 0) {
     const cleanAtts = attList.map(function(a) {
+      const aId = String(a.id || ('att_' + Date.now())).trim();
+      if (a.dataUrl) {
+        try {
+          saveAttachmentChunks(ss, a, clientTxId);
+        } catch (saveErr) {}
+      }
       return {
-        id: a.id || ('att_' + Date.now()),
-        name: a.name || 'Attachment',
-        type: a.type || 'application/octet-stream',
-        size: a.size || 0,
-        dataUrl: a.dataUrl || ''
+        id: aId,
+        name: String(a.name || 'Attachment').trim(),
+        type: String(a.type || 'image/jpeg').trim(),
+        size: Number(a.size) || 0,
+        // Embed directly if fits comfortably in cell (< 38,000 chars) for instant cross-device sync!
+        dataUrl: (a.dataUrl && a.dataUrl.length < 38000) ? a.dataUrl : undefined,
+        hasData: Boolean(a.dataUrl)
       };
     });
     attachmentsJson = JSON.stringify(cleanAtts);

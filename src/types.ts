@@ -6,6 +6,8 @@ export interface BillAttachment {
   type: string;
   size: number;
   dataUrl?: string;
+  url?: string;
+  hasData?: boolean;
 }
 
 export interface Transaction {

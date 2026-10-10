@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 import { Header } from './components/Header';
 import { DashboardStats } from './components/DashboardStats';
 import { ChartsSection } from './components/ChartsSection';
@@ -58,6 +58,8 @@ export default function App() {
   const [isDemoMode, setIsDemoMode] = useState<boolean>(!getSavedScriptUrl());
   const [isLoading, setIsLoading] = useState<boolean>(false);
   const [isSaving, setIsSaving] = useState<boolean>(false);
+  const isSavingRef = useRef<boolean>(false);
+  const recentAddedTxIds = useRef<Map<string, number>>(new Map());
   const [syncError, setSyncError] = useState<string | null>(null);
 
   // Modals
@@ -101,10 +103,15 @@ export default function App() {
   const [backendVersion, setBackendVersion] = useState<string>('2.2');
   const [showOutdatedScriptBanner, setShowOutdatedScriptBanner] = useState<boolean>(false);
 
-  // Load data from Google Apps Script
+  // Load data from Google Apps Script with Smart Merge
   const loadData = useCallback(async (urlToUse: string) => {
     if (!urlToUse) {
       setIsDemoMode(true);
+      return;
+    }
+
+    // Never interrupt active transaction saving!
+    if (isSavingRef.current) {
       return;
     }
 
@@ -113,7 +120,29 @@ export default function App() {
     try {
       const result = await fetchSheetData(urlToUse);
       setCategories(result.categories);
-      setTransactions(result.transactions);
+
+      // Smart Merge: NEVER wipe out transactions that were recently added in this session!
+      setTransactions((prev) => {
+        const now = Date.now();
+        const existingIds = new Set((result.transactions || []).map((t) => t.id));
+        const existingSigs = new Set((result.transactions || []).map((t) =>
+          `${t.date}_${t.type}_${t.category}_${t.amount}_${t.note}_${t.item || ''}_${t.sellerDetails || ''}`
+        ));
+
+        // Preserve any recent transactions added in the last 150 seconds that haven't propagated in getData yet
+        const pendingLocals = prev.filter((t) => {
+          const addedAt = recentAddedTxIds.current.get(t.id);
+          const isRecent = addedAt ? (now - addedAt < 150000) : false;
+          if (!isRecent) return false;
+          const sig = `${t.date}_${t.type}_${t.category}_${t.amount}_${t.note}_${t.item || ''}_${t.sellerDetails || ''}`;
+          return !existingIds.has(t.id) && !existingSigs.has(sig);
+        });
+
+        const merged = [...pendingLocals, ...(result.transactions || [])];
+        setCachedLocalTransactions(merged);
+        return merged;
+      });
+
       if (result.items) {
         setItems(result.items);
       }
@@ -162,11 +191,11 @@ export default function App() {
     });
   }, [loadData]);
 
-  // Auto-sync items, sellers, and transactions from Google Sheet on window focus and periodically
+  // Auto-sync items, sellers, and transactions from Google Sheet safely
   useEffect(() => {
     const handleFocus = () => {
       const activeUrl = scriptUrl || getSavedScriptUrl();
-      if (activeUrl && !isLoading && !isSaving) {
+      if (activeUrl && !isLoading && !isSavingRef.current) {
         loadData(activeUrl);
       }
     };
@@ -174,16 +203,16 @@ export default function App() {
     window.addEventListener('focus', handleFocus);
     const interval = setInterval(() => {
       const activeUrl = scriptUrl || getSavedScriptUrl();
-      if (activeUrl && !isLoading && !isSaving && document.visibilityState === 'visible') {
+      if (activeUrl && !isLoading && !isSavingRef.current && document.visibilityState === 'visible') {
         loadData(activeUrl);
       }
-    }, 25000); // 25s auto-poll to pick up changes made directly in Google Sheets
+    }, 30000); // 30s auto-poll to pick up changes made directly in Google Sheets
 
     return () => {
       window.removeEventListener('focus', handleFocus);
       clearInterval(interval);
     };
-  }, [scriptUrl, isLoading, isSaving, loadData]);
+  }, [scriptUrl, isLoading, loadData]);
 
   // Auto-dismiss welcome toast after 4.5 seconds
   useEffect(() => {
@@ -269,10 +298,14 @@ export default function App() {
     attachment?: BillAttachment;
     attachments?: BillAttachment[];
   }) => {
-    // Generate optimistic transaction record immediately
-    const tempId = `tx_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`;
+    // Generate unified, stable transaction ID upfront
+    const txId = `tx_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`;
+    const attachmentsList = newTx.attachments && newTx.attachments.length > 0
+      ? newTx.attachments
+      : (newTx.attachment ? [newTx.attachment] : []);
+
     const optimisticRecord: Transaction = {
-      id: tempId,
+      id: txId,
       timestamp: new Date().toISOString(),
       date: newTx.date,
       type: newTx.type,
@@ -281,23 +314,46 @@ export default function App() {
       note: newTx.note || '',
       item: newTx.item || '',
       sellerDetails: newTx.sellerDetails || '',
-      attachment: newTx.attachment || (newTx.attachments && newTx.attachments[0]) || undefined,
-      attachments: newTx.attachments || (newTx.attachment ? [newTx.attachment] : []),
+      attachment: attachmentsList[0] || undefined,
+      attachments: attachmentsList,
     };
 
-    // 1. Optimistically display in UI immediately!
-    setTransactions((prev) => [optimisticRecord, ...prev.filter((t) => t.id !== tempId)]);
-    const currentCached = getCachedLocalTransactions();
-    setCachedLocalTransactions([optimisticRecord, ...currentCached.filter((t) => t.id !== tempId)]);
+    // Track recently added transaction timestamp to guarantee it NEVER disappears
+    recentAddedTxIds.current.set(txId, Date.now());
 
-    // 2. Perform Google Apps Script sync asynchronously so UI does not block or spin
-    const urlToUse = (scriptUrl && scriptUrl.trim()) || getSavedScriptUrl();
-    if (urlToUse) {
-      saveTransaction(urlToUse, newTx).then((saved) => {
-        setTransactions((prev) => prev.map((t) => (t.id === tempId ? saved : t)));
-      }).catch((err) => {
-        console.warn('Background sync transaction to sheet notice:', err);
-      });
+    // 1. Immediately update UI & local cache!
+    setTransactions((prev) => [optimisticRecord, ...prev.filter((t) => t.id !== txId)]);
+    const currentCached = getCachedLocalTransactions();
+    setCachedLocalTransactions([optimisticRecord, ...currentCached.filter((t) => t.id !== txId)]);
+
+    // 2. Mark active save in progress to lock out disruptive background refreshes
+    isSavingRef.current = true;
+    setIsSaving(true);
+
+    try {
+      const urlToUse = (scriptUrl && scriptUrl.trim()) || getSavedScriptUrl();
+      if (urlToUse) {
+        const saved = await saveTransaction(urlToUse, {
+          ...newTx,
+          id: txId,
+          attachments: attachmentsList,
+          attachment: attachmentsList[0],
+        });
+
+        setTransactions((prev) => {
+          const exists = prev.some((t) => t.id === txId || t.id === saved.id);
+          if (exists) {
+            return prev.map((t) => (t.id === txId || t.id === saved.id ? saved : t));
+          }
+          return [saved, ...prev];
+        });
+      }
+    } catch (err) {
+      console.warn('Sync transaction to sheet notice:', err);
+      // Even if network had an issue, transaction remains safely stored in local state and cache!
+    } finally {
+      isSavingRef.current = false;
+      setIsSaving(false);
     }
   };
 

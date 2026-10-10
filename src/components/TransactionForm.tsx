@@ -194,30 +194,30 @@ export const TransactionForm: React.FC<TransactionFormProps> = ({
       attachments: [...attachments],
     };
 
-    // Instant local reset for immediate user responsiveness
-    setAmount('');
-    setNote('');
-    setItem('');
-    setSellerDetails('');
-    setAttachments([]);
-    if (fileInputRef.current) fileInputRef.current.value = '';
-    setJustSubmitted(true);
-    setTimeout(() => setJustSubmitted(false), 2200);
-
-    try {
-      confetti({
-        particleCount: 45,
-        spread: 55,
-        origin: { y: 0.8 },
-        colors: type === 'Income' ? ['#10b981', '#38beff', '#ffa133'] : ['#fa1f7c', '#a855f7', '#ff6b00']
-      });
-    } catch {
-      // Confetti is optional visual flair
-    }
-
     setIsSubmitting(true);
     try {
       await onSubmit(submissionPayload);
+
+      // Reset form on successful submission
+      setAmount('');
+      setNote('');
+      setItem('');
+      setSellerDetails('');
+      setAttachments([]);
+      if (fileInputRef.current) fileInputRef.current.value = '';
+      setJustSubmitted(true);
+      setTimeout(() => setJustSubmitted(false), 2500);
+
+      try {
+        confetti({
+          particleCount: 45,
+          spread: 55,
+          origin: { y: 0.8 },
+          colors: type === 'Income' ? ['#10b981', '#38beff', '#ffa133'] : ['#fa1f7c', '#a855f7', '#ff6b00']
+        });
+      } catch {
+        // Confetti is optional visual flair
+      }
     } catch (err) {
       setFormError((err as Error).message || 'Failed to submit transaction.');
     } finally {

@@ -50,7 +50,7 @@ export const AppsScriptModal: React.FC<AppsScriptModalProps> = ({ isOpen, onClos
           <div className="bg-emerald-50/70 border border-emerald-200/80 rounded-xl p-4 space-y-3">
             <div className="flex items-center gap-2 font-semibold text-emerald-900 text-xs uppercase tracking-wider">
               <BookOpen className="w-4 h-4 text-emerald-700" />
-              <span>Updating / Deploying Backend Script v2.2 (1 Minute)</span>
+              <span>Updating / Deploying Backend Script v2.3 (1 Minute)</span>
             </div>
 
             <div className="p-3 bg-white/80 rounded-xl border border-emerald-200 text-xs text-emerald-950 space-y-1.5">
@@ -65,7 +65,7 @@ export const AppsScriptModal: React.FC<AppsScriptModalProps> = ({ isOpen, onClos
                 <li>Under <strong>Version</strong>, select <strong className="text-emerald-700 font-bold">&ldquo;New version&rdquo;</strong>, then click <strong>Deploy</strong>!</li>
               </ol>
               <p className="text-[11px] text-emerald-800 italic mt-1">
-                ✨ That&apos;s it! Your active Web App URL is instantly updated to v2.2 with live delete, edit, deduplication & attachment sync.
+                ✨ That&apos;s it! Your active Web App URL is instantly updated to v2.3 with cross-device cloud attachment storage, zero-lag transaction saving & instant sync.
               </p>
             </div>
 

@@ -13,7 +13,9 @@ import {
   deleteAttachmentsForTx, 
   getTxSignature,
   syncAttachmentToServer,
-  fetchAllAttachmentsFromServer
+  fetchAllAttachmentsFromServer,
+  memoryAttachmentCache,
+  fetchAttachmentFromCloud
 } from './attachmentStore';
 
 const SCRIPT_URL_KEY = 'google_apps_script_url';
@@ -305,7 +307,12 @@ export async function hydrateTransactionsWithAttachments(
         const sig = getTxSignature(tx.date, tx.amount, tx.category);
         const storedAtts = byId.get(tx.id) || bySignature.get(sig);
 
-        let finalAtts = tx.attachments || (tx.attachment ? [tx.attachment] : []);
+        let finalAtts = (tx.attachments || (tx.attachment ? [tx.attachment] : [])).map((a) => {
+          if (!a.dataUrl && a.id && memoryAttachmentCache.has(a.id)) {
+            return { ...a, dataUrl: memoryAttachmentCache.get(a.id), hasData: true };
+          }
+          return a;
+        });
 
         if (storedAtts && storedAtts.length > 0) {
           finalAtts = storedAtts;
@@ -315,7 +322,10 @@ export async function hydrateTransactionsWithAttachments(
             if (a.dataUrl) return a;
             const fromServer = a.id ? serverAttachments[a.id] : undefined;
             if (fromServer && fromServer.dataUrl) {
-              return { ...a, dataUrl: fromServer.dataUrl };
+              if (a.id) {
+                memoryAttachmentCache.set(a.id, fromServer.dataUrl);
+              }
+              return { ...a, dataUrl: fromServer.dataUrl, hasData: true };
             }
             return a;
           });
@@ -394,9 +404,16 @@ export async function fetchSheetData(scriptUrl: string): Promise<{
     const rawTs = item.timestamp || '';
     const stableId = item.id || `tx_${idx + 1}_${String(rawTs).replace(/[^0-9]/g, '').slice(-8) || idx}`;
 
-    const itemAtts = item.attachments && item.attachments.length > 0
+    const itemAtts = (item.attachments && item.attachments.length > 0
       ? item.attachments
-      : (item.attachment ? [item.attachment] : []);
+      : (item.attachment ? [item.attachment] : [])).map((a) => {
+        if (a.id && a.dataUrl) {
+          memoryAttachmentCache.set(a.id, a.dataUrl);
+        } else if (a.id && memoryAttachmentCache.has(a.id)) {
+          return { ...a, dataUrl: memoryAttachmentCache.get(a.id), hasData: true };
+        }
+        return a;
+      });
 
     return {
       id: stableId,
@@ -485,6 +502,7 @@ export async function fetchSheetData(scriptUrl: string): Promise<{
 export async function saveTransaction(
   scriptUrl: string,
   tx: {
+    id?: string;
     date: string;
     type: 'Income' | 'Expense';
     category: string;
@@ -500,20 +518,25 @@ export async function saveTransaction(
     ? tx.attachments
     : (tx.attachment ? [tx.attachment] : []);
 
-  // Generate a stable unique client transaction ID
-  const clientTxId = `tx_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`;
+  // Use caller-provided stable transaction ID or generate one
+  const clientTxId = tx.id || `tx_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`;
   const sig = getTxSignature(tx.date, tx.amount, tx.category);
 
   // Guard against duplicate concurrent clicks for identical submission
-  const subKey = `${tx.date}_${tx.type}_${tx.category}_${tx.amount}_${tx.note}_${tx.item || ''}`;
+  const subKey = `${clientTxId}_${tx.date}_${tx.type}_${tx.amount}_${tx.note}`;
   if (inFlightSubmissions.has(subKey)) {
     console.warn('Duplicate submission in flight prevented:', subKey);
-    throw new Error('A transaction with the same details is currently saving. Please wait a moment.');
+    throw new Error('This transaction is currently saving. Please wait a moment.');
   }
   inFlightSubmissions.add(subKey);
 
-  // Immediately store high-res attachments to IndexedDB so they survive page refresh and navigation
+  // Immediately cache high-res attachments in memory & IndexedDB
   if (attachmentsList.length > 0) {
+    for (const a of attachmentsList) {
+      if (a.id && a.dataUrl) {
+        memoryAttachmentCache.set(a.id, a.dataUrl);
+      }
+    }
     await saveAttachmentsForTx(clientTxId, attachmentsList, sig);
   }
 
@@ -535,7 +558,7 @@ export async function saveTransaction(
     inFlightSubmissions.delete(subKey);
     const current = getCachedLocalTransactions();
     // Ensure not duplicated in cache
-    const filtered = current.filter((t) => t.id !== finalRecord.id);
+    const filtered = current.filter((t) => t.id !== finalRecord.id && t.id !== clientTxId);
     setCachedLocalTransactions([finalRecord, ...filtered]);
     return finalRecord;
   };
@@ -563,13 +586,16 @@ export async function saveTransaction(
       name: a.name,
       size: a.size,
       type: a.type,
-      dataUrl: a.dataUrl && a.dataUrl.length < 45000 ? a.dataUrl : undefined,
+      dataUrl: a.dataUrl || undefined,
+      hasData: Boolean(a.dataUrl),
     })),
     attachment: attachmentsList[0] ? {
+      id: attachmentsList[0].id || `att_${Date.now()}`,
       name: attachmentsList[0].name,
       size: attachmentsList[0].size,
       type: attachmentsList[0].type,
-      dataUrl: attachmentsList[0].dataUrl && attachmentsList[0].dataUrl.length < 45000 ? attachmentsList[0].dataUrl : undefined,
+      dataUrl: attachmentsList[0].dataUrl || undefined,
+      hasData: Boolean(attachmentsList[0].dataUrl),
     } : undefined,
   };
 
@@ -580,54 +606,17 @@ export async function saveTransaction(
     });
   }
 
-  const hasAttachmentData = attachmentsList.some((a) => Boolean(a.dataUrl));
-
   try {
-    // If has attachment data, use direct POST with text/plain to avoid HTTP 414 URI Too Long limits
-    if (hasAttachmentData) {
-      const postUrl = new URL(scriptUrl.trim());
-      postUrl.searchParams.set('action', 'add');
+    // Always use POST with text/plain to handle attachments & complex fields without 414 URI Length limits
+    const postUrl = new URL(scriptUrl.trim());
+    postUrl.searchParams.set('action', 'add');
 
-      const response = await fetch(postUrl.toString(), {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'text/plain;charset=utf-8',
-        },
-        body: JSON.stringify(txPayload),
-        redirect: 'follow',
-      });
-
-      if (response.ok) {
-        const result: SheetApiResponse = await response.json();
-        if (result.status === 'success' && result.record) {
-          const finalTx: Transaction = {
-            ...newTx,
-            id: result.record.id || clientTxId,
-            rowNumber: result.record.rowNumber,
-            timestamp: result.record.timestamp || newTx.timestamp,
-            attachments: attachmentsList,
-            attachment: attachmentsList[0] || undefined,
-          };
-          if (result.record.id && result.record.id !== clientTxId && attachmentsList.length > 0) {
-            await saveAttachmentsForTx(result.record.id, attachmentsList, sig);
-          }
-          return finalize(finalTx);
-        }
-        if (result.status === 'error') {
-          throw new Error(result.message || 'Apps script reported an error');
-        }
-      }
-      throw new Error(`HTTP ${response.status}`);
-    }
-
-    // Fast direct GET for transactions without attachments
-    const getUrl = new URL(scriptUrl.trim());
-    getUrl.searchParams.set('action', 'add');
-    getUrl.searchParams.set('data', encodeURIComponent(JSON.stringify(txPayload)));
-    getUrl.searchParams.set('t', Date.now().toString());
-
-    const response = await fetch(getUrl.toString(), {
-      method: 'GET',
+    const response = await fetch(postUrl.toString(), {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'text/plain;charset=utf-8',
+      },
+      body: JSON.stringify(txPayload),
       redirect: 'follow',
     });
 
@@ -648,54 +637,17 @@ export async function saveTransaction(
         return finalize(finalTx);
       }
       if (result.status === 'error') {
-        throw new Error(result.message || 'Apps script reported an error');
+        inFlightSubmissions.delete(subKey);
+        throw new Error(result.message || 'Google Apps Script reported an error saving transaction.');
       }
     }
-    throw new Error(`HTTP ${response.status}`);
+
+    throw new Error(`Google Apps Script responded with HTTP ${response.status}`);
   } catch (primaryErr) {
-    const errorMsg = (primaryErr as Error).message || '';
-    if (errorMsg.includes('Apps script reported an error') || errorMsg.includes('already recorded')) {
-      inFlightSubmissions.delete(subKey);
-      throw primaryErr;
-    }
-
-    console.warn('Primary save attempt failed, trying POST fallback...', primaryErr);
-    try {
-      const postUrl = new URL(scriptUrl.trim());
-      postUrl.searchParams.set('action', 'add');
-
-      const fbResponse = await fetch(postUrl.toString(), {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'text/plain;charset=utf-8',
-        },
-        body: JSON.stringify(txPayload),
-        redirect: 'follow',
-      });
-
-      if (fbResponse.ok) {
-        const fbResult: SheetApiResponse = await fbResponse.json();
-        if (fbResult.status === 'success' && fbResult.record) {
-          const finalTx: Transaction = {
-            ...newTx,
-            id: fbResult.record.id || clientTxId,
-            rowNumber: fbResult.record.rowNumber,
-            timestamp: fbResult.record.timestamp || newTx.timestamp,
-            attachments: attachmentsList,
-            attachment: attachmentsList[0] || undefined,
-          };
-          if (fbResult.record.id && fbResult.record.id !== clientTxId && attachmentsList.length > 0) {
-            await saveAttachmentsForTx(fbResult.record.id, attachmentsList, sig);
-          }
-          return finalize(finalTx);
-        }
-      }
-      // If server added it but redirect failed or returned status, finalize locally so user isn't blocked
-      return finalize(newTx);
-    } catch (postFallbackErr) {
-      // Finalize locally so transaction is never lost and UI doesn't stall
-      return finalize(newTx);
-    }
+    inFlightSubmissions.delete(subKey);
+    console.warn('Network issue saving transaction to sheet, keeping safe in local cache:', primaryErr);
+    // Keep transaction in local cache so user's data is never lost even if network hiccups
+    return finalize(newTx);
   }
 }
 
